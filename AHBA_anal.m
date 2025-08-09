@@ -17,7 +17,7 @@ degree = csvread(degree_path, 1, 1);
 % get group label and other covariates
 var_path = [base_dir, '\var.csv'];
 var = csvread(var_path, 1, 1);
-group = categorical(var(:,1)); % 1:controls 2:patients
+group = categorical(var(:,1)); % 1 for controls / 2 for patients
 age = var(:,2);
 sex = var(:,3);
 
@@ -39,81 +39,60 @@ gene_exp(ex_reg, :) = [];
 t_val(ex_reg, :) = [];
 
 % z-score:
-X=zscore(gene_exp);
-Y=zscore(t_val);
+X = zscore(gene_exp);
+Y = zscore(t_val);
 
-%perform full PLS and plot variance in Y explained by top 10 components
+% perform full PLS and plot variance in Y explained by top 10 components
 [XL, YL, XS, YS, BETA, PCTVAR, MSE, stats] = plsregress(X, Y);
 dim = 10;
-plot(1:dim, 100*PCTVAR(2,1:dim), '-o', 'LineWidth', 1.5, 'Color', [140/255,0,0]);
+plot(1:dim, 100*PCTVAR(2, 1:dim), '-o', 'LineWidth', 1.5, 'Color', [140/255,0,0]);
 set(gca, 'Fontsize',14)
 xlabel('PLS components', 'FontSize', 14);
 ylabel('Percent Variance Explained', 'FontSize', 14);
 grid on
 
-% number of components you want to keep
-dim=2;
-[XL, YL, XS, YS, BETA, PCTVAR, MSE, stats]=plsregress(X, Y, dim); % no need to do this but it keeps outputs tidy
-
-% plot correlation of PLS component 1/2 with t-val:
-[r1, p1]=corr(XS(:, 1), t_val);
-[r2, p2]=corr(XS(:, 2), t_val);
-
-% spin test
-rep=10000;
-% entropy_tval_surrogate_10000.txt are sourced from get_surrogate_map.ipynb
-tval_surrogate_maps = load([root_path, '\4_Transcriptome\entropy_tval_surrogate_10000.txt']);
-
-for j=1:rep
-         tval_surrogate_map = tval_surrogate_maps(j,:)';
-        [r_perm(j),p_perm(j)] = corr(XS(:,1), tval_surrogate_map);
-end
-
-P_corr = length(find(r_perm>=r))/rep;
-
-for z = 1:size(t_val, 2)
-    figure
-    plot(XS(:, 1), t_val(:, z), 'r.')
-    xlabel('XS scores for PLS component 1', 'FontSize',14);
-    ylabel('t-statistic','FontSize',14);
-    grid on
-end
-
-% permutation testing to assess significance of PLS result as a function of
-% the number of components (dim) included:
-
-tval_surrogate_maps = load([root_path, '\4_Transcriptome\entropy_tval_surrogate_10000.txt']);
-% tval_surrogate_maps = load([root_path, '\4_Transcriptome\entropy_tval_NoLhRh_surrogate_10000.txt']);
-for dim=1:3
+% decide number of components you want to keep and calculate again to keep data tidy
+dim = 2;
 [XL, YL, XS, YS, BETA, PCTVAR, MSE, stats] = plsregress(X, Y, dim);
-temp = cumsum(100*PCTVAR(2, 1:dim));
-Rsquared = temp(dim);
-    for j=1:rep
-         tval_surrogate_map = tval_surrogate_maps(j,:)';
-        Yp = zscore(tval_surrogate_map);
-        [XL, YL, XS, YS, BETA, PCTVAR, MSE, stats] = plsregress(X, Yp, dim);
-        temp = cumsum(100*PCTVAR(2, 1:dim));
-        Rsq(j) = temp(dim);
-    end
-R(dim) = Rsquared;
-P(dim) = length(find(Rsq>=Rsquared))/rep;
+Rsq = cumsum(100*PCTVAR(2, 1:dim));
+
+% align PLS components with desired direction%
+[R1, P1] = corr(XS(:, 1), t_val);
+if R1(1, 1) < 0
+    stats.W(:, 1) = -1 * stats.W(:, 1);
+    XS(:, 1) = -1 * XS(:, 1);
+end
+[R2, p2] = corr(XS(:, 2), t_val);
+if R2(1, 1) < 0
+    stats.W(:, 2) = -1 * stats.W(:, 2);
+    XS(:, 2)= -1 * XS(:, 2);
 end
 
-figure
-plot(1:dim, P,'ok','MarkerSize',8,'MarkerFaceColor','r');
-xlabel('Number of PLS components','FontSize',14);
-ylabel('p-value','FontSize',14);
-grid on
+% correlation between PLS components and with t-val:
+for z = 1:dim
+    [r(z, :), ~] = corr(XS(:, z), t_val);
+end
 
-% regional PLS 1 (or PLS 2, PLS 3) used for brain mapping figure
-PLS1_enorm = ones(n_reg, 1);
-PLS1_enorm(ex_regID)=0;
-PLS1_enorm(logical(PLS1_enorm)) = XS(:, 1); 
-save([root_path, '\4_Transcriptome\entropy_PLS1.txt'],'PLS1_enorm','-ascii');
+% spin test for PLS regression results (surrogate maps were obtained from BrainSMASH)
+surrogate_maps = load([base_dir, '\degree_tval_surrogate_maps.txt']);
 
-% keep data tidy
-dim=2;
-[XL,YL,XS,YS,BETA,PCTVAR,MSE,stats] = plsregress(X,Y,dim);
+for j = 1:size(surrogate_maps, 1)
+    surrogate_map = surrogate_maps(j,:)';
+    Y_spin = zscore(surrogate_map);
+    [XL_spin, YL_spin, XS_spin, YS_spin, BETA_spin, PCTVAR_spin, MSE_spin, stats_spin] = plsregress(X, Y_spin, dim);
+    PCTVAR_spin_all(j,:) = PCTVAR_spin(2,:);
+    Rsq_spin_all(j, :) = cumsum(100*PCTVAR_spin(2, 1:dim));
+    for z = 1:dim
+        [r_spin_all(j, z), ~] = corr(XS(:,z), surrogate_map);
+        [r_spin_all(j, z), ~] = corr(XS(:,z), surrogate_map);
+    end
+end
+
+for z = 1:dim
+    p_single(z, :) = length(find(PCTVAR_spin_all(:, z) >= PCTVAR(2, z)))/size(surrogate_maps, 1);
+    p_cumsum(z, :) = length(find(Rsq_spin_all(:, z) >= Rsq(:, z)))/size(surrogate_maps, 1);
+    p_corr(z, :) = length(find(r_spin_all(:, z) >= r(:, z)))/size(surrogate_maps, 1);
+end
 
 % get gene names
 gene_exp_info = readtable(gene_exp_path);
@@ -121,64 +100,73 @@ gene_name = gene_exp_info.Properties.VariableNames';
 gene_name(1) = []; % remove the first VaribleName that is not the gene name
 gene_index = 1:length(gene_name);
 
-% number of bootstrap iterations:
-bootnum=1000;
-
-% store regions' IDs and weights in descending order of weight for both components:
-[R1,P1]=corr(XS(:,1), t_val);
-
-% align PLS components with desired direction for interpretability 
-if R1(1, 1)<0  %this is specific to the data shape we were using - will need ammending
-    stats.W(:, 1) = -1 * stats.W(:, 1);
-    XS(:, 1) = -1 * XS(:, 1);
-end
+% calculate gene weights
+bootnum = 1000;
 
 [PLS1w, x1] = sort(stats.W(:, 1), 'descend');
 PLS1ids = gene_name(x1);
 geneindex1 = gene_index(x1);
-
-% print out results
 csvwrite('PLS1_ROIscores.csv', XS(:,1));
+PLS1_score = XS(:,1);
+
+[PLS2w, x2] = sort(stats.W(:, 2),'descend');
+PLS2ids = gene_name(x2);
+geneindex2 = geneindex(x2);
+csvwrite('PLS2_ROIscores.csv', XS(:, 2));
+PLS2_score = XS(:, 2);
 
 % define variables for storing the (ordered) weights from all bootstrap runs
 PLS1weights=[];
+PLS2weights=[];
 
 % start bootstrap
-for i=1:bootnum
-    myresample = randsample(size(X,1), size(X,1));
-    res(i,:)=myresample; % store resampling out of interest
-    Xr = X(myresample, :); % define X for resampled subjects
-    Yr = Y(myresample, :); % define X for resampled subjects
-    [XL,YL,XS,YS,BETA,PCTVAR,MSE,stats]=plsregress(Xr,Yr,dim); %perform PLS for resampled data
+for i = 1:bootnum
+    myresample = randsample(size(X, 1), size(X, 1));
+    res(i, :) = myresample;
+    Xr = X(myresample, :);
+    Yr = Y(myresample, :);
+    [XL, YL, XS, YS, BETA, PCTVAR, MSE, stats] = plsregress(Xr, Yr, dim);
       
-    temp = stats.W(:,1); % extract PLS1 weights
+    temp = stats.W(:, 1); % extract PLS1 weights
     newW = temp(x1); % order the newly obtained weights the same way as initial PLS 
-    if corr(PLS1w, newW)<0 % the sign of PLS components is arbitrary - make sure this aligns between runs
-        newW=-1*newW;
+    if corr(PLS1w, newW) < 0 % the sign of PLS components is arbitrary - make sure this aligns between runs
+        newW = -1 * newW;
     end
-    PLS1weights=[PLS1weights,newW]; % store (ordered) weights from this bootstrap run
+    PLS1weights = [PLS1weights, newW]; % store (ordered) weights from this bootstrap run
+
+    temp = stats.W(:, 2); % extract PLS2 weights
+    newW = temp(x2);
+    if corr(PLS2w, newW) < 0
+        newW = -1 * newW;
+    end
+     PLS2weights = [PLS2weights, newW];
 end
 
 % get standard deviation of weights from bootstrap runs
-PLS1sw=std(PLS1weights');
+PLS1sw = std(PLS1weights');
+PLS2sw = std(PLS2weights');
 
 % get bootstrap weights
-temp1=PLS1w./PLS1sw';
+temp1 = PLS1w./PLS1sw';
+temp2 = PLS2w./PLS2sw';
 
 % order bootstrap weights (Z) and names of regions
-[Z1, ind1]=sort(temp1,'descend');
-PLS1=PLS1ids(ind1);
-geneindex1=geneindex1(ind1);
-pval_pos = 1-normcdf(Z1(Z1>0));
-pval_neg = normcdf(Z1(Z1<0));
-pval = [pval_pos;pval_neg];
-fdr = [mafdr(pval_pos, 'BHFDR', 'true'); mafdr(pval_neg, 'BHFDR', 'true')];
+[Z1, ind1] = sort(temp1, 'descend');
+[Z2, ind2] = sort(temp2, 'descend');
+PLS1 = PLS1ids(ind1);
+PLS2 = PLS2ids(ind2);
+geneindex1 = geneindex1(ind1);
+geneindex2 = geneindex2(ind2);
 
 % print out results
-% later use first column of these csv files for pasting into GOrilla (for
-% bootstrapped ordered list of genes) 
-fid1 = fopen('PLS1_geneWeights_temp.csv','w');
-for i=1:length(gene_name)
-  fprintf(fid1,'%s, %d, %f, %f, %f\n', PLS1{i}, geneindex1(i), Z1(i), pval(i),fdr(i));
+fid1 = fopen([base_dir, 'PLS1_geneWeights.csv','w');
+for i = 1:length(gene_name)
+  fprintf(fid1,'%s, %d, %f\n', PLS1{i}, geneindex1(i), Z1(i));
 end
 fclose(fid1)
+
+fid2 = fopen([base_dir, 'PLS1_geneWeights.csv','w');
+for i = 1:length(gene_name)
+  fprintf(fid2,'%s, %d, %f\n', PLS2{i}, geneindex2(i), Z2(i));
+end
+fclose(fid2)
